@@ -98,23 +98,37 @@ const screen = async () => {
   return lastScreen;
 };
 
-async function waitFor(pattern, what, since = 0) {
+async function waitFor(pattern, what, since = 0, until = deadline) {
   for (;;) {
     const text = (await screen()).slice(since);
     const m = text.match(pattern);
     if (m) return m;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > until) {
+      if (until < deadline) return null;
+      throw new Error(`timed out waiting for ${what}`);
+    }
     await page.waitForTimeout(250);
   }
 }
 
-async function command(line, pattern, what) {
-  const since = (await screen()).length;
+/**
+ * Type `line` and wait for `pattern` in what follows. With `retryMs`, type
+ * it again if nothing matched by then: a line typed just as the shell starts
+ * (while the network logs its first lines) can be lost.
+ */
+async function command(line, pattern, what, { retryMs } = {}) {
+  let since = (await screen()).length;
   await page.evaluate((l) => window.__typeLine(l), line);
-  const m = await waitFor(pattern, what, since);
+  let m = retryMs ? await waitFor(pattern, what, since, Date.now() + retryMs) : null;
+  if (retryMs && !m) {
+    since = (await screen()).length;
+    await page.evaluate((l) => window.__typeLine(l), line);
+  }
+  m ??= await waitFor(pattern, what, since);
   // The shell ignores what is typed while a command runs: wait for its
-  // prompt before the next.
-  await waitFor(/uart:~\$$/, `the prompt after ${line}`, since);
+  // prompt before the next. Look for it after the command's output, not at
+  // the very end: log lines (DHCP, say) can land after the prompt.
+  await waitFor(/uart:~\$/, `the prompt after ${line}`, since + m.index + m[0].length);
   return m;
 }
 
@@ -142,7 +156,7 @@ await page.goto(base + (params.size ? `?${params}` : ''));
 
 await check('boot to shell', async () => {
   await waitFor(/uart:~\$/, 'the shell prompt');
-  await command('kernel version', /Zephyr version [\d.]+/, 'kernel version');
+  await command('kernel version', /Zephyr version [\d.]+/, 'kernel version', { retryMs: 10000 });
   return (await screen()).match(/Zephyr version [\d.]+/)[0];
 });
 
