@@ -44,6 +44,20 @@ term.onData((data) => {
   }
 });
 
+// Hooks for tests/browser.mjs: the terminal's text, and typing a line.
+window.__terminalText = () => {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+  }
+  return lines.join('\n');
+};
+window.__typeLine = (line) => {
+  for (const ch of line) inputBuffer.push(ch.charCodeAt(0));
+  inputBuffer.push(10);
+};
+
 function readInputByte() {
   if (inputBuffer.length > 0) {
     return inputBuffer.shift();
@@ -64,6 +78,84 @@ function enqueueByte(val) {
       flushScheduled = false;
     }, 0);
   }
+}
+
+/*
+ * Networking. Off unless asked for (?net=relaynet, or the header button):
+ * then the guest's e1000 is carried to relaynet by net.js. The token is the
+ * person's own if they pasted one (kept in this tab only), otherwise a
+ * 15-minute demo token.
+ */
+const TOKEN_KEY = 'qemu-wasm-zephyr.relaynet-token';
+const params = new URLSearchParams(location.search);
+const netEnabled = params.get('net') === 'relaynet';
+const netButton = document.getElementById('net-toggle');
+const tokenRow = document.getElementById('net-token-row');
+const tokenInput = document.getElementById('net-token');
+const tokenSave = document.getElementById('net-token-save');
+let savedToken = '';
+try { savedToken = sessionStorage.getItem(TOKEN_KEY) ?? ''; } catch { /* none */ }
+tokenInput.value = savedToken;
+tokenRow.hidden = !netEnabled;
+document.getElementById('intro-offline').hidden = netEnabled;
+document.getElementById('intro-online').hidden = !netEnabled;
+netButton.textContent = netEnabled ? 'Network: relaynet (restart without)' : 'Real network (relaynet)';
+netButton.addEventListener('click', () => {
+  const next = new URL(location.href);
+  if (netEnabled) next.searchParams.delete('net');
+  else next.searchParams.set('net', 'relaynet');
+  location.href = next.href;
+});
+// The network is set up once, when the guest starts, so a new token takes
+// effect on a restart, which only Save (or Enter) asks for.
+tokenInput.addEventListener('input', () => {
+  tokenSave.disabled = tokenInput.value.trim() === savedToken;
+});
+tokenInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !tokenSave.disabled) tokenSave.click();
+});
+tokenSave.addEventListener('click', () => {
+  const token = tokenInput.value.trim();
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch { /* forget */ }
+  location.reload();
+});
+
+// The intro's command buttons type into the shell.
+for (const button of document.querySelectorAll('.intro button.cmd')) {
+  button.addEventListener('click', () => {
+    window.__typeLine(button.textContent.trim());
+    term.focus();
+  });
+}
+
+const netLog = (text) => term.writeln(`\x1b[36m[net] ${text}\x1b[0m`);
+
+async function setUpNetwork() {
+  // The firmware's e1000 driver expects the card (Zephyr faults at boot
+  // without it), so it is always there; unconnected, its frames go nowhere.
+  // PCI slot 2 is where Zephyr's devicetree expects it (IRQ 11).
+  const none = { qemuArgs: ['-nic', 'none', '-device', 'e1000,romfile=,addr=2'], moduleOptions: {} };
+  if (!netEnabled) return none;
+  const { startRelayLink, demoToken } = await import('./net.js');
+  let token = savedToken;
+  if (token) {
+    netLog('Using your relaynet token.');
+  } else {
+    netLog('Asking relaynet for a demo token (15 minutes)...');
+    const got = await demoToken();
+    if (!got.token) {
+      netLog(`${got.message} Starting without a network. To use your own token, paste it above and click Save and restart.`);
+      return none;
+    }
+    token = got.token;
+  }
+  const link = startRelayLink({ token, onStatus: netLog });
+  window.__netStats = link.stats;
+  netLog(`Guest NIC: e1000, MAC ${link.mac}. Waiting for DHCP...`);
+  return link;
 }
 
 setStatus('Loading firmware...');
@@ -180,15 +272,19 @@ try {
     }
   }
 
+  const network = await setUpNetwork();
+  const seenStderr = new Set();
+
   const { default: createQemu } = await import('./qemu-system-i386.js');
 
-  await createQemu({
+  window.__qemu = await createQemu({
+    ...network.moduleOptions,
     stdin: readInputByte,
     arguments: [
       '-machine', 'q35,acpi=off',
       '-cpu', 'qemu32,+nx,+pae',
       '-m', '32',
-      '-nic', 'none',
+      ...network.qemuArgs,
       '-nographic',
       '-vga', 'none',
       '-chardev', 'stdio,id=char0,signal=off',
@@ -225,7 +321,10 @@ try {
       }
     },
     printErr: (text) => {
-      if (text) {
+      // Say each distinct line once: a warning from QEMU's main loop can
+      // repeat thousands of times a second.
+      if (text && !seenStderr.has(text)) {
+        seenStderr.add(text);
         console.warn('[qemu stderr]', text);
       }
     },

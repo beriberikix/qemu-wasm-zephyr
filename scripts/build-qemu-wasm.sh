@@ -113,7 +113,21 @@ build_qemu_wasm_native() {
     export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
     
     cd "$qemu_dir"
-    
+
+    # The same QEMU patches the Docker build applies (see patches/).
+    local patch
+    for patch in "$PROJECT_ROOT"/patches/*.patch; do
+        if git apply --check "$patch" 2>/dev/null; then
+            git apply "$patch" && log_success "Applied $(basename "$patch")"
+        elif git apply --reverse --check "$patch" 2>/dev/null; then
+            log_info "Already applied: $(basename "$patch")"
+        else
+            log_error "Cannot apply $(basename "$patch") to this QEMU tree"
+        fi
+    done
+    log_warn "Native builds do not patch Emscripten's poll(); if the page stops at"
+    log_warn "'Starting QEMU' with an ASYNCIFY_IMPORTS abort, use --docker (see README)."
+
     log_info "Configuring QEMU for WebAssembly..."
     log_info "This may take a few minutes..."
     

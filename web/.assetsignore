@@ -1,0 +1,3 @@
+# Not uploaded as static assets (see wrangler.jsonc).
+qemu-system-i386.wasm
+serve.py

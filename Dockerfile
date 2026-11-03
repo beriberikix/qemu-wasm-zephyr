@@ -1,10 +1,27 @@
 # QEMU WebAssembly builder image aligned with upstream CI wasm cross-container.
 FROM registry.gitlab.com/qemu-project/qemu/qemu/emsdk-wasm64-cross:latest
 
+# Pinned for reproducible builds; bump deliberately.
+ARG QEMU_REF=812798d
 WORKDIR /build
-RUN git clone https://github.com/qemu/qemu.git
+RUN git clone https://github.com/qemu/qemu.git && git -C qemu checkout ${QEMU_REF}
 
 WORKDIR /build/qemu
+# Emscripten's poll(), when proxied from a thread (QEMU runs on one), always
+# returns a Promise, even with a zero timeout; with -sASYNCIFY that aborts
+# ("_emscripten_receive_on_main_thread_js was not in ASYNCIFY_IMPORTS"). Make
+# it answer synchronously. QEMU's qemu_poll_ns() (patched below) never asks
+# poll() to wait; it sleeps on its own thread instead.
+RUN f=/emsdk/upstream/emscripten/src/lib/libsyscall.js \
+ && sed -i "s/^  __syscall_poll__async: 'auto',$//" $f \
+ && sed -i "s/const isAsyncContext = PThread.currentProxiedOperationCallerThread;/const isAsyncContext = false;/" $f \
+ && ! grep -q "__syscall_poll__async" $f \
+ && grep -q "const isAsyncContext = false;" $f
+
+# Patches for running under Emscripten; see each patch for why.
+COPY patches/ /build/patches/
+RUN git apply --verbose /build/patches/*.patch
+
 RUN bash -lc 'set -e; \
     if [ -f /emsdk/emsdk_env.sh ]; then . /emsdk/emsdk_env.sh; fi; \
     emconfigure ./configure --disable-docs \
@@ -12,7 +29,7 @@ RUN bash -lc 'set -e; \
         --static \
         --cpu=wasm64 \
         --disable-tools \
-        --enable-debug \
+        --disable-debug-info \
         --enable-tcg-interpreter \
         --disable-user \
         --disable-guest-agent'
