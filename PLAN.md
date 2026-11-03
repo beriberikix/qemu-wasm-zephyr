@@ -37,7 +37,7 @@ sessionStorage), otherwise a 15-minute demo token from relaynet's
 - [x] 5. End to end in headless Chromium: DHCP lease, `net dns` resolves a
       name, `net ping` to the gateway gets replies, TCP to the internet
       connects (relaynet does not forward ICMP to the internet).
-- [ ] 6. Docs and hosting: README networking section, COOP/COEP note for
+- [x] 6. Docs and hosting: README networking section, COOP/COEP note for
       GitHub Pages, build script updates.
 
 ## Log
@@ -110,3 +110,14 @@ Results (`npm test`, `npm run test:net`):
 Demo tokens are only issued to origins relaynet allows, so on localhost the
 page needs a pasted token (or `--origin https://beriberikix.github.io/qemu-wasm-zephyr/`
 in the test).
+
+### Step 6: docs (done)
+
+README: Networking (how it works, token, ICMP, PCI slot), Tests, Hosting
+(cross-origin isolation; GitHub Pages needs a service worker, not included),
+the Docker build's patches and why. `scripts/build-qemu-wasm.sh --native`
+applies `patches/` too and warns that Emscripten's poll() is not patched.
+
+Not done (needs a decision): a GitHub Pages deployment. It needs a
+cross-origin-isolation service worker and the 45 MB .wasm published
+somewhere (Pages, or a release asset).

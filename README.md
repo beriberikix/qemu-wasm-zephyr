@@ -8,6 +8,9 @@ Run Zephyr RTOS inside QEMU compiled to WebAssembly with Emscripten and interact
 - Browser frontend that loads `qemu-system-i386.js` and mounts `zephyr.elf`.
 - TTY bridge for bidirectional serial communication between xterm.js and QEMU.
 - Local development server with COOP/COEP headers for SharedArrayBuffer.
+- Optional real networking: the guest's e1000 is carried to
+  [relaynet](https://relaynet.network), which answers DHCP and DNS and connects
+  it to the internet. See [Networking](#networking).
 
 ## Layout
 
@@ -17,6 +20,10 @@ Run Zephyr RTOS inside QEMU compiled to WebAssembly with Emscripten and interact
 - `web/index.html`: Terminal UI.
 - `web/main.js`: QEMU startup and serial bridge.
 - `web/serve.py`: COI-enabled static server.
+- `web/net.js`: carries the e1000's Ethernet frames to relaynet.
+- `web/relaynet.mjs`: relaynet's client helper (vendored from zephyr-wasm-soc).
+- `patches/`: QEMU patches applied by the Docker build.
+- `tests/browser.mjs`: boots the page in headless Chromium and drives the shell.
 
 ## Automated Build
 
@@ -108,9 +115,25 @@ Options:
 ./scripts/build-qemu-wasm.sh --help
 ```
 
+The Docker build pins QEMU and makes two changes so QEMU's main loop runs
+under the Emscripten in QEMU's emsdk-wasm64-cross image (5.0.2):
+
+- `patches/0001-util-poll-without-waiting-on-emscripten.patch`: QEMU never
+  asks `poll()` to wait; it sleeps on its own thread instead.
+- Emscripten's `poll()` answers synchronously. Proxied from a thread it
+  returns a Promise, which aborts under `-sASYNCIFY`
+  ([emscripten#27291](https://github.com/emscripten-core/emscripten/issues/27291)).
+
+Without them the page stops at "Starting QEMU": `unsupported syscall:
+__syscall_ppoll`, or `_emscripten_receive_on_main_thread_js was not in
+ASYNCIFY_IMPORTS`. The native and manual builds apply the QEMU patch but not
+the Emscripten change, so prefer Docker.
+
 ### Manual (If Needed)
 
-From a QEMU source tree with emsdk support:
+From a QEMU source tree with emsdk support, with `patches/*.patch` applied
+(`git apply /path/to/qemu-wasm-zephyr/patches/*.patch`) and Emscripten's
+`__syscall_poll` made synchronous as in the `Dockerfile`:
 
 ```bash
 # Source Emscripten
@@ -156,6 +179,60 @@ You should get a Zephyr boot message and an interactive shell prompt.
 - Serial output bytes are captured from TTY `put_char`, batched, and written to xterm.js.
 - QEMU runs with `-serial mon:stdio -nographic` to keep serial interactive.
 
-## Next Phase
+## Networking
 
-Networking via proxy (SLIP or Ethernet proxy path) is intended for phase two.
+Click **Real network (relaynet)** in the page header, or open the page with
+`?net=relaynet`. The guest restarts with its e1000 linked to relaynet, gets an
+address by DHCP and can resolve names and open TCP connections:
+
+```
+uart:~$ net dns example.com
+uart:~$ net ping 10.0.2.2
+uart:~$ net tcp connect 1.1.1.1 80
+```
+
+How it works: QEMU runs with `-netdev socket,connect=...`, which sends each
+frame over a TCP connection with a 4-byte length in front. Emscripten turns
+that connection into a WebSocket, and `web/net.js` answers for it in the page,
+so the frames go to relaynet's relay (`wss://relay.relaynet.network/`, the
+`relay.v1` protocol) and its replies come back the same way. No QEMU change is
+needed for this.
+
+The token is your own if you paste one into the token field (kept in this tab
+only), otherwise a 15-minute demo token from relaynet. Demo tokens are only
+issued to pages on origins relaynet allows, so on `localhost` paste a token
+from https://relaynet.network.
+
+Things to know:
+
+- relaynet does not forward ICMP to the internet: `net ping 8.8.8.8` times
+  out, `net ping 10.0.2.2` (the relay's gateway) answers.
+- Private address ranges, port 25 and some UDP ports are blocked by
+  relaynet; see its docs.
+- The e1000 must sit in PCI slot 2 (`addr=2`): Zephyr's devicetree wires it to
+  IRQ 11, which is that slot's line. In another slot the guest sends but never
+  receives.
+
+## Tests
+
+```bash
+npm install
+npm test                    # boots to the shell, checks `kernel version`
+RELAYNET_TOKEN=rr_... npm run test:net
+                            # also: DHCP lease, DNS, ping the gateway, TCP out
+```
+
+`node tests/browser.mjs --net --origin https://beriberikix.github.io/qemu-wasm-zephyr/`
+serves the page under that origin instead, which gets a demo token without
+`RELAYNET_TOKEN`. For poking at problems: `--run "net iface; kernel uptime"`
+types commands and prints what follows, and `--netdump --pcap-out x.pcap`
+saves what the e1000 sent and received.
+
+## Hosting
+
+QEMU's threads need `SharedArrayBuffer`, so the page must be cross-origin
+isolated (`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`). `web/serve.py` sends them.
+GitHub Pages cannot set headers, so a Pages deployment needs a service worker
+that adds them (such as coi-serviceworker); none is included yet. The QEMU
+`.wasm` is about 45 MB.
