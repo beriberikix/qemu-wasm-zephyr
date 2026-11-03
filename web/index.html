@@ -34,6 +34,13 @@
       color: #888;
     }
     header .status.ready { color: #4ecca3; }
+    header .spacer { flex: 1; }
+    header button, header input {
+      font: inherit; font-size: 0.8rem; padding: 4px 8px;
+      background: #0f3460; color: #e0e0e0; border: 1px solid #1f4a80; border-radius: 4px;
+    }
+    header button { cursor: pointer; }
+    header input { width: 14em; }
     #terminal-container {
       flex: 1;
       padding: 4px;
@@ -45,6 +52,12 @@
   <header>
     <h1>Zephyr RTOS on QEMU x86</h1>
     <span id="status" class="status">Initializing...</span>
+    <span class="spacer"></span>
+    <button id="net-toggle" type="button"
+            title="Carry the guest's Ethernet to relaynet.network: DHCP, DNS and the internet. Restarts the guest.">Real network (relaynet)</button>
+    <input id="net-token" type="password" placeholder="optional relaynet token" hidden
+           spellcheck="false" autocomplete="off" aria-label="relaynet API token"
+           title="Optional: your API token from relaynet.network, for sessions longer than the 15-minute demo. Kept only in this tab; used from the next start.">
   </header>
   <div id="terminal-container"></div>
 

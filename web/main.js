@@ -44,6 +44,20 @@ term.onData((data) => {
   }
 });
 
+// Hooks for tests/browser.mjs: the terminal's text, and typing a line.
+window.__terminalText = () => {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+  }
+  return lines.join('\n');
+};
+window.__typeLine = (line) => {
+  for (const ch of line) inputBuffer.push(ch.charCodeAt(0));
+  inputBuffer.push(10);
+};
+
 function readInputByte() {
   if (inputBuffer.length > 0) {
     return inputBuffer.shift();
@@ -64,6 +78,54 @@ function enqueueByte(val) {
       flushScheduled = false;
     }, 0);
   }
+}
+
+/*
+ * Networking. Off unless asked for (?net=relaynet, or the header button):
+ * then the guest's e1000 is carried to relaynet by net.js. The token is the
+ * person's own if they pasted one (kept in this tab only), otherwise a
+ * 15-minute demo token.
+ */
+const TOKEN_KEY = 'qemu-wasm-zephyr.relaynet-token';
+const params = new URLSearchParams(location.search);
+const netEnabled = params.get('net') === 'relaynet';
+const netButton = document.getElementById('net-toggle');
+const tokenInput = document.getElementById('net-token');
+try { tokenInput.value = sessionStorage.getItem(TOKEN_KEY) ?? ''; } catch { /* none */ }
+tokenInput.hidden = !netEnabled;
+netButton.textContent = netEnabled ? 'Network: relaynet (restart without)' : 'Real network (relaynet)';
+netButton.addEventListener('click', () => {
+  const next = new URL(location.href);
+  if (netEnabled) next.searchParams.delete('net');
+  else next.searchParams.set('net', 'relaynet');
+  location.href = next.href;
+});
+tokenInput.addEventListener('change', () => {
+  try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch { /* forget */ }
+});
+
+const netLog = (text) => term.writeln(`\x1b[36m[net] ${text}\x1b[0m`);
+
+async function setUpNetwork() {
+  const none = { qemuArgs: ['-nic', 'none'], moduleOptions: {} };
+  if (!netEnabled) return none;
+  const { startRelayLink, demoToken } = await import('./net.js');
+  let token = tokenInput.value.trim();
+  if (token) {
+    netLog('Using your relaynet token.');
+  } else {
+    netLog('Asking relaynet for a demo token (15 minutes)...');
+    const got = await demoToken();
+    if (!got.token) {
+      netLog(`${got.message} Starting without a network.`);
+      return none;
+    }
+    token = got.token;
+  }
+  const link = startRelayLink({ token, onStatus: netLog });
+  window.__netStats = link.stats;
+  netLog(`Guest NIC: e1000, MAC ${link.mac}. Waiting for DHCP...`);
+  return link;
 }
 
 setStatus('Loading firmware...');
@@ -180,15 +242,19 @@ try {
     }
   }
 
+  const network = await setUpNetwork();
+  const seenStderr = new Set();
+
   const { default: createQemu } = await import('./qemu-system-i386.js');
 
   await createQemu({
+    ...network.moduleOptions,
     stdin: readInputByte,
     arguments: [
       '-machine', 'q35,acpi=off',
       '-cpu', 'qemu32,+nx,+pae',
       '-m', '32',
-      '-nic', 'none',
+      ...network.qemuArgs,
       '-nographic',
       '-vga', 'none',
       '-chardev', 'stdio,id=char0,signal=off',
@@ -225,7 +291,10 @@ try {
       }
     },
     printErr: (text) => {
-      if (text) {
+      // Say each distinct line once: a warning from QEMU's main loop can
+      // repeat thousands of times a second.
+      if (text && !seenStderr.has(text)) {
+        seenStderr.add(text);
         console.warn('[qemu stderr]', text);
       }
     },

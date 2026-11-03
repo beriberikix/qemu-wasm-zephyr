@@ -1,0 +1,36 @@
+diff --git a/util/qemu-timer.c b/util/qemu-timer.c
+index d93a020..f384af9 100644
+--- a/util/qemu-timer.c
++++ b/util/qemu-timer.c
+@@ -326,7 +326,30 @@ int qemu_timeout_ns_to_ms(int64_t ns)
+  */
+ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
+ {
+-#ifdef CONFIG_PPOLL
++#ifdef __EMSCRIPTEN__
++    /*
++     * Emscripten runs poll() on the browser's main thread. With a timeout it
++     * waits there asynchronously, which Asyncify cannot do inside a proxied
++     * call, so the module aborts. Poll without waiting, and wait here, on
++     * this thread, in short sleeps: a notifier or a socket is seen within a
++     * millisecond.
++     */
++    int64_t deadline = timeout < 0 ? INT64_MAX
++                       : qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + timeout;
++    for (;;) {
++        int n = poll((struct pollfd *)fds, nfds, 0);
++        int64_t now;
++
++        if (n != 0 || timeout == 0) {
++            return n;
++        }
++        now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++        if (now >= deadline) {
++            return 0;
++        }
++        g_usleep(MIN((deadline - now) / 1000 + 1, 1000));
++    }
++#elif defined(CONFIG_PPOLL)
+     if (timeout < 0) {
+         return ppoll((struct pollfd *)fds, nfds, NULL, NULL);
+     } else {

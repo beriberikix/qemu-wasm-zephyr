@@ -1,0 +1,12 @@
+{
+  "name": "qemu-wasm-zephyr",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/browser.mjs",
+    "test:net": "node tests/browser.mjs --net"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}
