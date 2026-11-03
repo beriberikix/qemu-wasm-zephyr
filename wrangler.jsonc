@@ -1,0 +1,13 @@
+// Cloudflare deployment of web/ (see README, "Hosting").
+{
+  "name": "qemu-wasm-zephyr",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "web",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    { "binding": "WASM", "bucket_name": "qemu-wasm-zephyr" }
+  ]
+}

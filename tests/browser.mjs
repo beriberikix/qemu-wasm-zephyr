@@ -11,6 +11,7 @@
 // --origin serves the page under another origin (Playwright routing), for
 // relaynet's demo tokens, which are only issued to allowlisted origins.
 // RELAYNET_TOKEN in the environment is used instead of a demo token.
+// --url tests a deployed copy (e.g. the Cloudflare Worker) instead of web/.
 
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -28,6 +29,7 @@ const option = (name, fallback) => {
 
 const NET = flag('--net');
 const ORIGIN = option('--origin', null);
+const URL_ = option('--url', null);
 const TIMEOUT = Number(option('--timeout', NET ? 240 : 120)) * 1000;
 
 const TYPES = {
@@ -58,7 +60,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const local = `http://127.0.0.1:${server.address().port}/`;
-const base = ORIGIN ?? local;
+const base = URL_ ?? ORIGIN ?? local;
 
 const browser = await chromium.launch();
 const context = await browser.newContext();

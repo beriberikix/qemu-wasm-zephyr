@@ -233,6 +233,34 @@ saves what the e1000 sent and received.
 QEMU's threads need `SharedArrayBuffer`, so the page must be cross-origin
 isolated (`Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`). `web/serve.py` sends them.
-GitHub Pages cannot set headers, so a Pages deployment needs a service worker
-that adds them (such as coi-serviceworker); none is included yet. The QEMU
-`.wasm` is about 45 MB.
+GitHub Pages cannot set headers, so a Pages deployment would need a service
+worker that adds them (such as coi-serviceworker); none is included.
+
+### Cloudflare
+
+`wrangler.jsonc` deploys `web/` as a Worker with static assets:
+
+- `web/_headers` sets the isolation headers on every static file.
+- The QEMU `.wasm` (about 45 MB) is over the 25 MiB limit for a static asset,
+  so it goes in an R2 bucket (`qemu-wasm-zephyr`), and `cloudflare/worker.js`
+  serves it on the page's origin with the same headers.
+
+Build first (so `web/` holds the QEMU files and `zephyr.elf`), then:
+
+```bash
+npx wrangler login
+npx wrangler r2 bucket create qemu-wasm-zephyr        # once
+npx wrangler r2 object put qemu-wasm-zephyr/qemu-system-i386.wasm \
+    --file web/qemu-system-i386.wasm --content-type application/wasm --remote
+npm run deploy
+```
+
+Upload the `.wasm` again whenever QEMU is rebuilt. To try it locally, put the
+object with `--local` instead of `--remote` and run `npm run dev:cf`
+(http://localhost:8787/).
+
+To check a deployment: `node tests/browser.mjs --url https://<worker>/`
+(add `--net`, with `RELAYNET_TOKEN` set, for the network checks).
+
+relaynet only gives demo tokens to pages on origins it allows, so a new host
+needs its origin added there; until then, visitors paste a token.

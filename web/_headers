@@ -1,0 +1,6 @@
+# Cross-origin isolation, for the SharedArrayBuffer QEMU's threads need
+# (Cloudflare static assets; tests/browser.mjs and serve.py set the same).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
