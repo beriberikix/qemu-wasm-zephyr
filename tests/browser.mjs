@@ -126,6 +126,7 @@ const check = async (name, fn) => {
 
 const params = new URLSearchParams();
 if (NET) params.set('net', 'relaynet');
+if (flag('--netdump')) params.set('netdump', '1');
 if (process.env.RELAYNET_TOKEN) {
   // As if pasted into the token field (kept in sessionStorage, never the URL).
   await page.addInitScript((t) => sessionStorage.setItem('qemu-wasm-zephyr.relaynet-token', t),
@@ -139,7 +140,32 @@ await check('boot to shell', async () => {
   return (await screen()).match(/Zephyr version [\d.]+/)[0];
 });
 
+// --run "cmd; cmd": type each after boot, 5 s apart, and print what follows
+// (with the NIC's frame counts). For poking at a problem.
+const RUN = option('--run', null);
+if (RUN && ok) {
+  for (const cmd of RUN.split(';').map((c) => c.trim()).filter(Boolean)) {
+    const since = (await screen()).length;
+    await page.evaluate((l) => window.__typeLine(l), cmd);
+    await page.waitForTimeout(5000);
+    const stats = await page.evaluate(() => JSON.stringify(window.__netStats ?? null));
+    console.log(`--- ${cmd}  (${elapsed()}, frames ${stats})\n${(await screen()).slice(since)}`);
+    if (flag('--netdump')) {
+      const size = await page.evaluate(() => { try { return window.__qemu.FS.stat('/net0.pcap').size; } catch (e) { return String(e); } });
+      console.log(`    /net0.pcap: ${size} bytes`);
+    }
+  }
+}
+
 if (NET && ok) {
+  await check('NIC frames reach JS', async () => {
+    for (;;) {
+      const stats = await page.evaluate(() => window.__netStats && { ...window.__netStats });
+      if (stats?.toRelay > 0) return `${stats.toRelay} frame(s) from the guest, ${stats.toGuest} to it`;
+      if (Date.now() > deadline) throw new Error(`no frame from the guest (stats: ${JSON.stringify(stats)})`);
+      await page.waitForTimeout(250);
+    }
+  });
   await check('DHCP lease', async () => {
     const m = await waitFor(/IPv4 address: (\d+\.\d+\.\d+\.\d+)/, 'a DHCP lease');
     return m[1];

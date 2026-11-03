@@ -27,8 +27,8 @@ sessionStorage), otherwise a 15-minute demo token from relaynet's
 ## Steps
 
 - [x] 1. Baseline: build QEMU wasm (Docker) and the firmware; a headless
-      Chromium test (`tests/boot.mjs`) boots to `uart:~$`.
-- [ ] 2. Frames reach JS: add an e1000 + socket netdev, a shim that logs
+      Chromium test (`tests/browser.mjs`) boots to `uart:~$`.
+- [x] 2. Frames reach JS: add an e1000 + socket netdev, a shim that logs
       frames; the test sees the guest's first frame (any Ethernet frame).
 - [ ] 3. Firmware networking: e1000, IPv4, DHCPv4, DNS resolver, net shell
       (`net iface`, `net ping`, `net dns`). Builds and still boots.
@@ -66,3 +66,19 @@ interpreter is very slow); repeated stderr lines are printed once.
 
 Result: `node tests/browser.mjs` boots to `uart:~$` and answers
 `kernel version` (Zephyr 4.3.0) in about 3 s.
+
+### Step 2: frames reach JS (done)
+
+`-netdev socket,connect=127.0.0.1:5555` plus `-device e1000` works with no
+QEMU change: Emscripten's SOCKFS opens a WebSocket for the connection, and
+web/net.js answers for that URL (Module.websocket.url) with a stand-in.
+
+- The e1000's option ROM (`efi-e1000.rom`) is not shipped; `romfile=` turns
+  it off (Zephyr does not need it).
+- SOCKFS compares `socket.readyState` with `socket.OPEN` on the instance, as
+  a real WebSocket has it. The stand-in had the constants only as statics,
+  so SOCKFS took it for still connecting and queued every write forever
+  while reporting success. Found with `?netdump` (QEMU filter-dump to
+  /net0.pcap, which showed frames reaching the netdev) and byte counters.
+
+Debugging aids kept: `tests/browser.mjs --run "cmd; cmd"` and `--netdump`.

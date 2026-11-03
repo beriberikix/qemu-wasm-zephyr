@@ -247,7 +247,7 @@ try {
 
   const { default: createQemu } = await import('./qemu-system-i386.js');
 
-  await createQemu({
+  window.__qemu = await createQemu({
     ...network.moduleOptions,
     stdin: readInputByte,
     arguments: [
