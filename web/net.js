@@ -193,13 +193,14 @@ export function startRelayLink({ token, onStatus = () => {}, url = RELAY_URL }) 
   // A random, locally administered MAC: relaynet leases addresses by MAC.
   const mac = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b, i) =>
     (i === 0 ? (b & 0xfe) | 0x02 : b).toString(16).padStart(2, '0')).join(':');
+  stats.mac = mac;
 
   return {
     stats,
     mac,
     qemuArgs: [
       '-netdev', 'socket,id=net0,connect=127.0.0.1:5555',
-      '-device', `e1000,netdev=net0,mac=${mac},romfile=`,
+      '-device', `e1000,netdev=net0,mac=${mac},romfile=,addr=2`,
       ...(new URLSearchParams(location.search).has('netdump')
         ? ['-object', 'filter-dump,id=dump0,netdev=net0,file=/net0.pcap'] : []),
     ],

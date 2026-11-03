@@ -30,12 +30,13 @@ sessionStorage), otherwise a 15-minute demo token from relaynet's
       Chromium test (`tests/browser.mjs`) boots to `uart:~$`.
 - [x] 2. Frames reach JS: add an e1000 + socket netdev, a shim that logs
       frames; the test sees the guest's first frame (any Ethernet frame).
-- [ ] 3. Firmware networking: e1000, IPv4, DHCPv4, DNS resolver, net shell
+- [x] 3. Firmware networking: e1000, IPv4, DHCPv4, DNS resolver, net shell
       (`net iface`, `net ping`, `net dns`). Builds and still boots.
-- [ ] 4. relaynet client in web/: vendored helper, Network button + optional
+- [x] 4. relaynet client in web/: vendored helper, Network button + optional
       token field, demo token fallback, status line.
-- [ ] 5. End to end in headless Chromium: DHCP lease, `net dns` resolves a
-      name, `net ping` gets replies.
+- [x] 5. End to end in headless Chromium: DHCP lease, `net dns` resolves a
+      name, `net ping` to the gateway gets replies, TCP to the internet
+      connects (relaynet does not forward ICMP to the internet).
 - [ ] 6. Docs and hosting: README networking section, COOP/COEP note for
       GitHub Pages, build script updates.
 
@@ -82,3 +83,30 @@ web/net.js answers for that URL (Module.websocket.url) with a stand-in.
   /net0.pcap, which showed frames reaching the netdev) and byte counters.
 
 Debugging aids kept: `tests/browser.mjs --run "cmd; cmd"` and `--netdump`.
+
+### Steps 3-5: firmware, relaynet client, end to end (done)
+
+- Firmware: e1000, IPv4, DHCPv4 (first discover within 2 s, the Kconfig
+  minimum), DNS resolver, TCP, net shell; main.c starts DHCP and prints
+  `IPv4 address: ...` when it binds.
+- relaynet answered every discover with an offer, and Zephyr never saw one:
+  its devicetree wires the e1000 to IRQ 11, true for PCI slot 2, where it
+  sits in Zephyr's own QEMU setup (behind the VGA card). With `-vga none`
+  it landed in slot 1, on another line. `addr=2` fixes it.
+- The networked firmware faults at boot with no e1000, so the page always
+  adds one; with networking off it is unconnected.
+- relaynet's docs: "ping 8.8.8.8 is expected to fail (ICMP is not
+  forwarded)". The test pings the gateway (10.0.2.2) and opens TCP to
+  1.1.1.1:80 instead.
+
+Results (`npm test`, `npm run test:net`):
+
+| Run | Result |
+|---|---|
+| No network | shell in 3.0 s |
+| Beta token (RELAYNET_TOKEN) | lease 3.7 s, DNS 4.0 s, gateway ping 6.3 s, TCP 6.8 s |
+| Demo token, page at beriberikix.github.io/qemu-wasm-zephyr/ | lease 4.9 s, DNS 5.2 s, gateway ping 7.4 s, TCP 7.9 s |
+
+Demo tokens are only issued to origins relaynet allows, so on localhost the
+page needs a pasted token (or `--origin https://beriberikix.github.io/qemu-wasm-zephyr/`
+in the test).

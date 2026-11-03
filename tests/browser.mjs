@@ -5,7 +5,7 @@
 //
 //   node tests/browser.mjs                 boot to the shell prompt
 //   node tests/browser.mjs --net           also bring up the network and
-//                                          check DHCP, DNS and ping
+//                                          check DHCP, DNS, ping and TCP
 //
 // Serves web/ itself, with the COOP/COEP headers QEMU's threads need.
 // --origin serves the page under another origin (Playwright routing), for
@@ -109,7 +109,11 @@ async function waitFor(pattern, what, since = 0) {
 async function command(line, pattern, what) {
   const since = (await screen()).length;
   await page.evaluate((l) => window.__typeLine(l), line);
-  return waitFor(pattern, what, since);
+  const m = await waitFor(pattern, what, since);
+  // The shell ignores what is typed while a command runs: wait for its
+  // prompt before the next.
+  await waitFor(/uart:~\$$/, `the prompt after ${line}`, since);
+  return m;
 }
 
 let ok = true;
@@ -174,10 +178,32 @@ if (NET && ok) {
     const m = await command('net dns example.com', /example\.com.*?(\d+\.\d+\.\d+\.\d+)/s, 'a DNS answer');
     return `example.com -> ${m[1]}`;
   });
-  await check('ping', async () => {
-    const m = await command('net ping -c 3 1.1.1.1', /(\d+) bytes from 1\.1\.1\.1/, 'a ping reply');
-    return `${m[1]}-byte reply from 1.1.1.1`;
+  // relaynet answers ICMP from its gateway but does not carry it to the
+  // internet (observed: pings to 1.1.1.1 and 8.8.8.8 time out while TCP to
+  // the same hosts connects), so: ping the gateway, and TCP to the internet.
+  await check('ping the gateway', async () => {
+    const m = await command('net ping -c 3 10.0.2.2', /(\d+) bytes from 10\.0\.2\.2/, 'a ping reply');
+    return `${m[1]}-byte reply from 10.0.2.2`;
   });
+  await check('TCP to the internet', async () => {
+    await command('net tcp connect 1.1.1.1 80', /TCP connected/, 'a TCP connection to 1.1.1.1:80');
+    await command('net tcp close', /Connection closed|Not connected/, 'the close');
+    return 'connected to 1.1.1.1:80';
+  });
+
+}
+
+// --pcap-out FILE (with --netdump): save what the netdev saw.
+const PCAP_OUT = option('--pcap-out', null);
+if (PCAP_OUT && !crashed) {
+  const bytes = await page.evaluate(() => {
+    try { return Array.from(window.__qemu.FS.readFile('/net0.pcap')); } catch { return null; }
+  });
+  if (bytes) {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(PCAP_OUT, Buffer.from(bytes));
+    console.log(`saved ${bytes.length} bytes of capture to ${PCAP_OUT}`);
+  }
 }
 
 console.log(results.join('\n'));

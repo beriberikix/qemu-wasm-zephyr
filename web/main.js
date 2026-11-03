@@ -107,7 +107,10 @@ tokenInput.addEventListener('change', () => {
 const netLog = (text) => term.writeln(`\x1b[36m[net] ${text}\x1b[0m`);
 
 async function setUpNetwork() {
-  const none = { qemuArgs: ['-nic', 'none'], moduleOptions: {} };
+  // The firmware's e1000 driver expects the card (Zephyr faults at boot
+  // without it), so it is always there; unconnected, its frames go nowhere.
+  // PCI slot 2 is where Zephyr's devicetree expects it (IRQ 11).
+  const none = { qemuArgs: ['-nic', 'none', '-device', 'e1000,romfile=,addr=2'], moduleOptions: {} };
   if (!netEnabled) return none;
   const { startRelayLink, demoToken } = await import('./net.js');
   let token = tokenInput.value.trim();
