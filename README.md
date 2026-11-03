@@ -199,7 +199,9 @@ so the frames go to relaynet's relay (`wss://relay.relaynet.network/`, the
 needed for this.
 
 The token is your own if you paste one into the token field (kept in this tab
-only), otherwise a 15-minute demo token from relaynet. Demo tokens are only
+only), otherwise a 15-minute demo token from relaynet. To use your own: click
+**Real network (relaynet)**, paste the token into the field that appears and
+press Enter; the page restarts with it. Demo tokens are only
 issued to pages on origins relaynet allows, so on `localhost` paste a token
 from https://relaynet.network.
 

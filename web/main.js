@@ -100,8 +100,11 @@ netButton.addEventListener('click', () => {
   else next.searchParams.set('net', 'relaynet');
   location.href = next.href;
 });
+// The network is set up once, at start: a new token restarts the page so the
+// guest comes up with it.
 tokenInput.addEventListener('change', () => {
   try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch { /* forget */ }
+  location.reload();
 });
 
 const netLog = (text) => term.writeln(`\x1b[36m[net] ${text}\x1b[0m`);
