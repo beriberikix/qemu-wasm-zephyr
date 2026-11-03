@@ -90,9 +90,15 @@ const TOKEN_KEY = 'qemu-wasm-zephyr.relaynet-token';
 const params = new URLSearchParams(location.search);
 const netEnabled = params.get('net') === 'relaynet';
 const netButton = document.getElementById('net-toggle');
+const tokenRow = document.getElementById('net-token-row');
 const tokenInput = document.getElementById('net-token');
-try { tokenInput.value = sessionStorage.getItem(TOKEN_KEY) ?? ''; } catch { /* none */ }
-tokenInput.hidden = !netEnabled;
+const tokenSave = document.getElementById('net-token-save');
+let savedToken = '';
+try { savedToken = sessionStorage.getItem(TOKEN_KEY) ?? ''; } catch { /* none */ }
+tokenInput.value = savedToken;
+tokenRow.hidden = !netEnabled;
+document.getElementById('intro-offline').hidden = netEnabled;
+document.getElementById('intro-online').hidden = !netEnabled;
 netButton.textContent = netEnabled ? 'Network: relaynet (restart without)' : 'Real network (relaynet)';
 netButton.addEventListener('click', () => {
   const next = new URL(location.href);
@@ -100,12 +106,30 @@ netButton.addEventListener('click', () => {
   else next.searchParams.set('net', 'relaynet');
   location.href = next.href;
 });
-// The network is set up once, at start: a new token restarts the page so the
-// guest comes up with it.
-tokenInput.addEventListener('change', () => {
-  try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch { /* forget */ }
+// The network is set up once, when the guest starts, so a new token takes
+// effect on a restart, which only Save (or Enter) asks for.
+tokenInput.addEventListener('input', () => {
+  tokenSave.disabled = tokenInput.value.trim() === savedToken;
+});
+tokenInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !tokenSave.disabled) tokenSave.click();
+});
+tokenSave.addEventListener('click', () => {
+  const token = tokenInput.value.trim();
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch { /* forget */ }
   location.reload();
 });
+
+// The intro's command buttons type into the shell.
+for (const button of document.querySelectorAll('.intro button.cmd')) {
+  button.addEventListener('click', () => {
+    window.__typeLine(button.textContent.trim());
+    term.focus();
+  });
+}
 
 const netLog = (text) => term.writeln(`\x1b[36m[net] ${text}\x1b[0m`);
 
@@ -116,14 +140,14 @@ async function setUpNetwork() {
   const none = { qemuArgs: ['-nic', 'none', '-device', 'e1000,romfile=,addr=2'], moduleOptions: {} };
   if (!netEnabled) return none;
   const { startRelayLink, demoToken } = await import('./net.js');
-  let token = tokenInput.value.trim();
+  let token = savedToken;
   if (token) {
     netLog('Using your relaynet token.');
   } else {
     netLog('Asking relaynet for a demo token (15 minutes)...');
     const got = await demoToken();
     if (!got.token) {
-      netLog(`${got.message} Starting without a network.`);
+      netLog(`${got.message} Starting without a network. To use your own token, paste it above and click Save and restart.`);
       return none;
     }
     token = got.token;

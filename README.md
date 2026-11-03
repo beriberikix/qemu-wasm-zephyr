@@ -1,251 +1,188 @@
-# Zephyr RTOS On QEMU x86 In The Browser
+# Zephyr RTOS on QEMU x86, in the browser
 
-Run Zephyr RTOS inside QEMU compiled to WebAssembly with Emscripten and interact using a two-way xterm.js terminal.
+**Live demo: https://qemu-wasm-zephyr.jberi.workers.dev**
 
-## What This Repo Provides
+Zephyr's `qemu_x86` board, running in QEMU compiled to WebAssembly with
+Emscripten, with its serial shell in an xterm.js terminal. Everything runs in
+the browser tab. With **Real network (relaynet)** turned on, the guest's
+emulated e1000 Ethernet card is connected to [relaynet](https://relaynet.network):
+the guest gets an address by DHCP, resolves names and opens TCP connections
+to the internet.
 
-- Zephyr firmware project for `qemu_x86` with shell enabled.
-- Browser frontend that loads `qemu-system-i386.js` and mounts `zephyr.elf`.
-- TTY bridge for bidirectional serial communication between xterm.js and QEMU.
-- Local development server with COOP/COEP headers for SharedArrayBuffer.
-- Optional real networking: the guest's e1000 is carried to
-  [relaynet](https://relaynet.network), which answers DHCP and DNS and connects
-  it to the internet. See [Networking](#networking).
+## Try it
 
-## Layout
+Open the demo and click a command above the terminal, or type one:
 
-- `firmware/`: Zephyr app and build config.
-- `scripts/build.sh`: One-command build and artifact staging.
-- `scripts/dev.sh`: Build (or reuse artifacts) and launch local web server.
-- `web/index.html`: Terminal UI.
-- `web/main.js`: QEMU startup and serial bridge.
-- `web/serve.py`: COI-enabled static server.
-- `web/net.js`: carries the e1000's Ethernet frames to relaynet.
-- `web/relaynet.mjs`: relaynet's client helper (vendored from zephyr-wasm-soc).
-- `patches/`: QEMU patches applied by the Docker build.
-- `tests/browser.mjs`: boots the page in headless Chromium and drives the shell.
-
-## Automated Build
-
-From repo root:
-
-```bash
-chmod +x scripts/build.sh
-scripts/build.sh
+```
+uart:~$ kernel version
+uart:~$ kernel thread list
 ```
 
-This will:
+Then click **Real network (relaynet)**. The guest restarts with networking:
 
-- Initialize west workspace if needed.
-- Run `west update`.
-- Build Zephyr firmware for `qemu_x86`.
-- Copy `firmware/build/zephyr/zephyr.elf` into `web/zephyr.elf`.
-
-If you already built QEMU wasm elsewhere, copy runtime artifacts in the same step:
-
-```bash
-scripts/build.sh --qemu-build-dir /path/to/qemu/build-wasm
+```
+uart:~$ net iface
+uart:~$ net dns example.com
+uart:~$ net ping 10.0.2.2
+uart:~$ net tcp connect 1.1.1.1 80
 ```
 
-To only copy runtime files without rebuilding firmware:
+Networking needs a relaynet token. With none saved, the page asks relaynet
+for a free 15-minute demo token, which relaynet only issues to pages on
+origins it allows. To use your own token (from https://relaynet.network),
+paste it into the field next to the button and click **Save and restart**.
+The token is kept in this tab only (sessionStorage), never in the URL, and is
+sent only to relaynet.
 
-```bash
-scripts/build.sh --skip-firmware --qemu-build-dir /path/to/qemu/build-wasm
+## How it works
+
+```
+Zephyr (qemu_x86: shell, e1000 driver, DHCPv4, DNS, TCP)
+  QEMU i386, compiled to wasm64 (TCG interpreter), on a worker thread
+    serial   -> Emscripten TTY -> xterm.js
+    e1000    -> -netdev socket (length-prefixed Ethernet frames)
+             -> Emscripten SOCKFS, which makes the connection a WebSocket
+             -> web/net.js, which answers for that WebSocket in the page
+             -> relaynet relay (wss://relay.relaynet.network/, relay.v1)
+             -> DHCP, DNS and NAT to the internet
 ```
 
-## One-Command Dev Run
+- **Serial:** keyboard input is buffered from xterm.js and read by QEMU
+  through the Emscripten TTY's `get_char`; output bytes from `put_char` are
+  batched and written to xterm.js. QEMU's serial port is
+  `-chardev stdio -serial chardev:char0`, with `-nographic`.
+- **Network:** QEMU's socket netdev needs no change. Emscripten turns its
+  `connect()` into a WebSocket to `Module.websocket.url`; `web/net.js` replaces
+  `WebSocket` for that one URL, splits QEMU's byte stream into frames, sends
+  them to relaynet with its client (`web/relaynet.mjs`, vendored from
+  [zephyr-wasm-soc](https://github.com/beriberikix/zephyr-wasm-soc)) and
+  frames the replies back.
+- **Threads:** QEMU uses pthreads (`SharedArrayBuffer`), so the page must be
+  cross-origin isolated: `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp`.
 
-From repo root:
+Things to know:
+
+- relaynet does not forward ICMP to the internet: `net ping 8.8.8.8` times
+  out, `net ping 10.0.2.2` (the relay's gateway) answers
+  ([relaynet#174](https://github.com/beriberikix/relaynet/issues/174)).
+- relaynet blocks private address ranges, port 25 and some UDP ports; see its
+  docs.
+- The e1000 must sit in PCI slot 2 (`addr=2`): Zephyr's devicetree wires it to
+  IRQ 11, which is that slot's line. In another slot the guest sends but never
+  receives. The firmware faults at boot without an e1000, so the page always
+  adds one (unconnected when networking is off).
+
+## Run it locally
 
 ```bash
-chmod +x scripts/dev.sh
-scripts/dev.sh --port 8125
+scripts/build.sh                 # Zephyr firmware -> web/zephyr.elf
+./scripts/build-qemu-wasm.sh     # QEMU wasm (Docker) -> web/
+cd web && python3 serve.py --port 8080
 ```
 
-This runs `scripts/build.sh` first, then launches `web/serve.py`.
+Open http://localhost:8080. Or `scripts/dev.sh --port 8080` builds the
+firmware and starts the server in one step. On `localhost` relaynet won't
+issue demo tokens, so paste your own token to try networking.
 
-If firmware is already built and you only want to refresh runtime assets:
+## Build
 
-```bash
-scripts/dev.sh --skip-firmware --qemu-build-dir /path/to/qemu/build-wasm --port 8125
-```
+### Zephyr firmware
 
-## Build Zephyr Firmware
+`scripts/build.sh` initializes the west workspace if needed, runs
+`west update`, builds `firmware/` for `qemu_x86` and copies `zephyr.elf` into
+`web/`. By hand:
 
 ```bash
 cd firmware
 west init -l .
 west update
 west build -b qemu_x86 .
+cp build/zephyr/zephyr.elf ../web/
 ```
 
-Resulting binary:
+The firmware (`firmware/prj.conf`) enables the shell, the e1000 driver, IPv4,
+DHCPv4, the DNS resolver, TCP and the net shell; `firmware/src/main.c` starts
+DHCP and prints `IPv4 address: ...` when it gets a lease.
 
-- `firmware/build/zephyr/zephyr.elf`
+If QEMU is built elsewhere, `scripts/build.sh --qemu-build-dir DIR` also copies
+its runtime files, and `--skip-firmware` copies only those.
 
-Copy it into the web folder:
+### QEMU WebAssembly
 
 ```bash
-cp firmware/build/zephyr/zephyr.elf web/
+./scripts/build-qemu-wasm.sh             # Docker if available, else native emsdk
+./scripts/build-qemu-wasm.sh --docker    # or --native; --help for the rest
 ```
 
-## Build QEMU WebAssembly Binary
+It copies `qemu-system-i386.{js,wasm}` and the ROMs (`bios-256k.bin`,
+`kvmvapic.bin`, `multiboot_dma.bin`) into `web/`.
 
-### Automated (Recommended)
-
-From repo root:
-
-```bash
-./scripts/build-qemu-wasm.sh
-```
-
-This will:
-- Auto-detect Docker and use containerized build when available (recommended).
-- Fall back to native emsdk build when Docker is unavailable.
-- Copy `qemu-system-i386.{js,wasm}` and ROM files (`bios-256k.bin`, `kvmvapic.bin`, `multiboot_dma.bin`) to `web/` (`worker.js` is optional).
-
-Options:
-
-```bash
-./scripts/build-qemu-wasm.sh --docker                  # Force Docker build
-./scripts/build-qemu-wasm.sh --native                  # Force native emsdk build
-./scripts/build-qemu-wasm.sh --emsdk-dir /custom/emsdk --qemu-dir /custom/qemu
-./scripts/build-qemu-wasm.sh --skip-emsdk              # Native mode only
-./scripts/build-qemu-wasm.sh --skip-build              # Native mode only (just copy)
-./scripts/build-qemu-wasm.sh --help
-```
-
-The Docker build pins QEMU and makes two changes so QEMU's main loop runs
-under the Emscripten in QEMU's emsdk-wasm64-cross image (5.0.2):
+The Docker build (`Dockerfile`) uses QEMU's `emsdk-wasm64-cross` image
+(Emscripten 5.0.2), pins QEMU, and makes two changes so QEMU's main loop runs
+there:
 
 - `patches/0001-util-poll-without-waiting-on-emscripten.patch`: QEMU never
   asks `poll()` to wait; it sleeps on its own thread instead.
-- Emscripten's `poll()` answers synchronously. Proxied from a thread it
-  returns a Promise, which aborts under `-sASYNCIFY`
-  ([emscripten#27291](https://github.com/emscripten-core/emscripten/issues/27291)).
+- Emscripten's `poll()` answers synchronously. Called from a thread it is
+  proxied to the main thread and returns a Promise, which aborts under
+  `-sASYNCIFY`
+  ([emscripten#27291](https://github.com/emscripten-core/emscripten/issues/27291),
+  tracked here in [#1](https://github.com/beriberikix/qemu-wasm-zephyr/issues/1)).
 
 Without them the page stops at "Starting QEMU": `unsupported syscall:
 __syscall_ppoll`, or `_emscripten_receive_on_main_thread_js was not in
-ASYNCIFY_IMPORTS`. The native and manual builds apply the QEMU patch but not
-the Emscripten change, so prefer Docker.
+ASYNCIFY_IMPORTS`. The native build applies the QEMU patch but not the
+Emscripten change, so prefer Docker.
 
-### Manual (If Needed)
-
-From a QEMU source tree with emsdk support, with `patches/*.patch` applied
-(`git apply /path/to/qemu-wasm-zephyr/patches/*.patch`) and Emscripten's
-`__syscall_poll` made synchronous as in the `Dockerfile`:
+To build by hand, from a QEMU source tree with `patches/*.patch` applied and
+Emscripten's `__syscall_poll` made synchronous as in the `Dockerfile`:
 
 ```bash
-# Source Emscripten
 source /path/to/emsdk/emsdk_env.sh
-
-# Configure and build
-mkdir -p build-wasm && cd build-wasm
-emconfigure ../configure \
-  --cpu=wasm64 \
-  --target-list=i386-softmmu \
-  --enable-system \
-  --enable-tcg-interpreter \
-  --disable-user \
-  --disable-docs \
-  --disable-tools \
-  --disable-guest-agent
+emconfigure ./configure --cpu=wasm64 --target-list=i386-softmmu --static \
+  --enable-tcg-interpreter --disable-user --disable-docs --disable-tools \
+  --disable-guest-agent --disable-debug-info
 emmake make -j"$(nproc)"
-
-# Copy to web directory
-cp i386-softmmu/qemu-system-i386.{js,wasm} /path/to/qemu-wasm-zephyr/web/
-cp pc-bios/bios-256k.bin /path/to/qemu-wasm-zephyr/web/
-cp pc-bios/kvmvapic.bin pc-bios/multiboot_dma.bin /path/to/qemu-wasm-zephyr/web/
-# Optional if your emscripten build emits a pthread worker:
-cp i386-softmmu/qemu-system-i386.worker.js /path/to/qemu-wasm-zephyr/web/
 ```
 
-## Run In Browser
-
-```bash
-cd web
-python3 serve.py --port 8080
-```
-
-Open:
-
-- http://localhost:8080
-
-You should get a Zephyr boot message and an interactive shell prompt.
-
-## Terminal Bridge Details
-
-- Keyboard input is buffered from xterm.js and read by QEMU via Emscripten TTY `get_char`.
-- Serial output bytes are captured from TTY `put_char`, batched, and written to xterm.js.
-- QEMU runs with `-serial mon:stdio -nographic` to keep serial interactive.
-
-## Networking
-
-Click **Real network (relaynet)** in the page header, or open the page with
-`?net=relaynet`. The guest restarts with its e1000 linked to relaynet, gets an
-address by DHCP and can resolve names and open TCP connections:
-
-```
-uart:~$ net dns example.com
-uart:~$ net ping 10.0.2.2
-uart:~$ net tcp connect 1.1.1.1 80
-```
-
-How it works: QEMU runs with `-netdev socket,connect=...`, which sends each
-frame over a TCP connection with a 4-byte length in front. Emscripten turns
-that connection into a WebSocket, and `web/net.js` answers for it in the page,
-so the frames go to relaynet's relay (`wss://relay.relaynet.network/`, the
-`relay.v1` protocol) and its replies come back the same way. No QEMU change is
-needed for this.
-
-The token is your own if you paste one into the token field (kept in this tab
-only), otherwise a 15-minute demo token from relaynet. To use your own: click
-**Real network (relaynet)**, paste the token into the field that appears and
-press Enter; the page restarts with it. Demo tokens are only
-issued to pages on origins relaynet allows, so on `localhost` paste a token
-from https://relaynet.network.
-
-Things to know:
-
-- relaynet does not forward ICMP to the internet: `net ping 8.8.8.8` times
-  out, `net ping 10.0.2.2` (the relay's gateway) answers.
-- Private address ranges, port 25 and some UDP ports are blocked by
-  relaynet; see its docs.
-- The e1000 must sit in PCI slot 2 (`addr=2`): Zephyr's devicetree wires it to
-  IRQ 11, which is that slot's line. In another slot the guest sends but never
-  receives.
+Then copy `qemu-system-i386.js`, `qemu-system-i386.wasm`, `bios-256k.bin`,
+`kvmvapic.bin` and `multiboot_dma.bin` from the build tree into `web/`.
 
 ## Tests
 
+`tests/browser.mjs` serves `web/` with the isolation headers, boots it in
+headless Chromium (Playwright) and drives the shell:
+
 ```bash
 npm install
-npm test                    # boots to the shell, checks `kernel version`
-RELAYNET_TOKEN=rr_... npm run test:net
-                            # also: DHCP lease, DNS, ping the gateway, TCP out
+npm test                                   # boots, checks `kernel version`
+RELAYNET_TOKEN=rr_... npm run test:net     # also DHCP, DNS, gateway ping, TCP out
+node tests/browser.mjs --url https://qemu-wasm-zephyr.jberi.workers.dev/
+                                           # the same checks against a deployment
 ```
 
-`node tests/browser.mjs --net --origin https://beriberikix.github.io/qemu-wasm-zephyr/`
-serves the page under that origin instead, which gets a demo token without
-`RELAYNET_TOKEN`. For poking at problems: `--run "net iface; kernel uptime"`
-types commands and prints what follows, and `--netdump --pcap-out x.pcap`
-saves what the e1000 sent and received.
+`--origin https://beriberikix.github.io/qemu-wasm-zephyr/` serves the page
+under an origin relaynet gives demo tokens to, so `--net` works without
+`RELAYNET_TOKEN`. For debugging, `--run "net iface; kernel uptime"` types
+commands and prints what follows, and `--netdump --pcap-out x.pcap` saves
+what the e1000 sent and received.
 
 ## Hosting
 
-QEMU's threads need `SharedArrayBuffer`, so the page must be cross-origin
-isolated (`Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`). `web/serve.py` sends them.
-GitHub Pages cannot set headers, so a Pages deployment would need a service
-worker that adds them (such as coi-serviceworker); none is included.
+The page needs the cross-origin isolation headers, and QEMU's `.wasm` is
+about 45 MB. `web/serve.py` and the tests send the headers locally. GitHub
+Pages can't set headers (it would need a service worker such as
+coi-serviceworker), so the demo is hosted on Cloudflare.
 
 ### Cloudflare
 
 `wrangler.jsonc` deploys `web/` as a Worker with static assets:
 
 - `web/_headers` sets the isolation headers on every static file.
-- The QEMU `.wasm` (about 45 MB) is over the 25 MiB limit for a static asset,
-  so it goes in an R2 bucket (`qemu-wasm-zephyr`), and `cloudflare/worker.js`
-  serves it on the page's origin with the same headers.
+- The `.wasm` is over the 25 MiB limit for a static asset, so it goes in an
+  R2 bucket (`qemu-wasm-zephyr`), and `cloudflare/worker.js` serves it on the
+  page's origin with the same headers.
 
 Build first (so `web/` holds the QEMU files and `zephyr.elf`), then:
 
@@ -257,12 +194,25 @@ npx wrangler r2 object put qemu-wasm-zephyr/qemu-system-i386.wasm \
 npm run deploy
 ```
 
-Upload the `.wasm` again whenever QEMU is rebuilt. To try it locally, put the
-object with `--local` instead of `--remote` and run `npm run dev:cf`
+Upload the `.wasm` again whenever QEMU is rebuilt. To try the Worker locally,
+put the object with `--local` instead of `--remote` and run `npm run dev:cf`
 (http://localhost:8787/).
 
-To check a deployment: `node tests/browser.mjs --url https://<worker>/`
-(add `--net`, with `RELAYNET_TOKEN` set, for the network checks).
+relaynet only issues demo tokens to pages on origins it allows (its
+`ALLOWED_ORIGINS`), so a new host needs its origin added there; until then,
+visitors paste a token.
 
-relaynet only gives demo tokens to pages on origins it allows, so a new host
-needs its origin added there; until then, visitors paste a token.
+## Layout
+
+- `web/index.html`, `web/main.js`: the page, QEMU startup and the serial bridge.
+- `web/net.js`: carries the e1000's Ethernet frames to relaynet.
+- `web/relaynet.mjs`: relaynet's client (vendored from zephyr-wasm-soc).
+- `web/serve.py`: local server with the isolation headers.
+- `web/_headers`, `web/.assetsignore`: Cloudflare static asset settings.
+- `cloudflare/worker.js`, `wrangler.jsonc`: the Cloudflare Worker.
+- `firmware/`: the Zephyr app.
+- `Dockerfile`, `patches/`: the QEMU wasm build and its patches.
+- `scripts/`: `build.sh` (firmware), `build-qemu-wasm.sh` (QEMU), `dev.sh`
+  (build and serve).
+- `tests/browser.mjs`: headless Chromium tests.
+- `PLAN.md`: how networking was added, step by step, and what was found.

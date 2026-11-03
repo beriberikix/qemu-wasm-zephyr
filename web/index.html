@@ -21,8 +21,9 @@
       background: #16213e;
       border-bottom: 1px solid #0f3460;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 12px;
+      gap: 8px 12px;
     }
     header h1 {
       font-size: 1rem;
@@ -40,7 +41,29 @@
       background: #0f3460; color: #e0e0e0; border: 1px solid #1f4a80; border-radius: 4px;
     }
     header button { cursor: pointer; }
+    header button:disabled { cursor: default; opacity: 0.5; }
     header input { width: 14em; }
+    header a, .intro a { color: #7fb3ff; }
+    header a { font-size: 0.8rem; }
+    .token[hidden] { display: none; }
+    .token { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; }
+    .intro {
+      padding: 8px 16px;
+      background: #121a33;
+      border-bottom: 1px solid #0f3460;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: #b8bcd0;
+    }
+    .intro p + p { margin-top: 2px; }
+    .intro button.cmd {
+      font: 0.8rem 'Cascadia Code', 'Fira Code', Consolas, monospace;
+      padding: 1px 6px; margin: 0 2px;
+      background: #0f3460; color: #e0e0e0; border: 1px solid #1f4a80; border-radius: 4px;
+      cursor: pointer;
+    }
+    .intro button.cmd:hover { border-color: #e94560; }
+    .intro [hidden] { display: none; }
     #terminal-container {
       flex: 1;
       padding: 4px;
@@ -54,11 +77,32 @@
     <span id="status" class="status">Initializing...</span>
     <span class="spacer"></span>
     <button id="net-toggle" type="button"
-            title="Carry the guest's Ethernet to relaynet.network: DHCP, DNS and the internet. Restarts the guest.">Real network (relaynet)</button>
-    <input id="net-token" type="password" placeholder="optional relaynet token" hidden
-           spellcheck="false" autocomplete="off" aria-label="relaynet API token"
-           title="Optional: your API token from relaynet.network, for sessions longer than the 15-minute demo. Kept only in this tab; used from the next start.">
+            title="Connect the guest's Ethernet to relaynet.network for DHCP, DNS and the internet. Restarts the guest.">Real network (relaynet)</button>
+    <span id="net-token-row" class="token" hidden>
+      <input id="net-token" type="password" placeholder="relaynet token (optional)"
+             spellcheck="false" autocomplete="off" aria-label="relaynet API token"
+             title="Your API token from relaynet.network, for sessions longer than the 15-minute demo token. Kept only in this tab.">
+      <button id="net-token-save" type="button" disabled
+              title="Save the token in this tab and restart the guest with it">Save and restart</button>
+      <a href="https://relaynet.network" target="_blank" rel="noopener">Get a token</a>
+    </span>
+    <a href="https://github.com/beriberikix/qemu-wasm-zephyr" target="_blank" rel="noopener">Source on GitHub</a>
   </header>
+  <section class="intro" aria-label="About this demo">
+    <p>Zephyr's <code>qemu_x86</code> board, running in QEMU compiled to WebAssembly, entirely in this browser tab.
+       Click a command to type it into the terminal, or type your own:
+       <button class="cmd" type="button">help</button>
+       <button class="cmd" type="button">kernel version</button>
+       <button class="cmd" type="button">kernel uptime</button>
+       <button class="cmd" type="button">kernel thread list</button></p>
+    <p id="intro-offline">For a real network, click <b>Real network (relaynet)</b>: the guest restarts and gets an address by DHCP.</p>
+    <p id="intro-online" hidden>Network:
+       <button class="cmd" type="button">net iface</button>
+       <button class="cmd" type="button">net dns example.com</button>
+       <button class="cmd" type="button">net ping 10.0.2.2</button>
+       <button class="cmd" type="button">net tcp connect 1.1.1.1 80</button>
+       (relaynet doesn't carry ping to the internet, so <code>net ping 8.8.8.8</code> times out.)</p>
+  </section>
   <div id="terminal-container"></div>
 
   <script crossorigin="anonymous"
